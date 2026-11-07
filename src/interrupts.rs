@@ -3,6 +3,7 @@ use x86_64::structures::gdt::{GlobalDescriptorTable, Descriptor};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 use lazy_static::lazy_static;
+use x86_64::structures::idt::PageFaultErrorCode;
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
@@ -53,6 +54,7 @@ lazy_static! {
         idt.breakpoint.set_handler_fn(breakpoint_handler);
         
         unsafe {
+	    idt.page_fault.set_handler_fn(page_fault_handler);
             idt.double_fault.set_handler_fn(double_fault_handler)
                 .set_stack_index(DOUBLE_FAULT_IST_INDEX);
         }
@@ -74,4 +76,19 @@ extern "x86-interrupt" fn double_fault_handler(
     stack_frame: InterruptStackFrame, _error_code: u64) -> !
 {
     panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
+}
+
+extern "x86-interrupt" fn page_fault_handler(
+    stack_frame: InterruptStackFrame,
+    error_code: PageFaultErrorCode,
+) {
+    use x86_64::registers::control::Cr2;
+
+    println!("EXCEPTION: PAGE FAULT");
+    println!("Accessed Address: {:?}", Cr2::read());
+    println!("Error Code: {:?}", error_code);
+    println!("{:#?}", stack_frame);
+    
+    // Пока просто зависаем, чтобы увидеть сообщение
+    loop {}
 }
