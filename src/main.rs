@@ -19,6 +19,7 @@ pub extern "C" fn _start() -> ! {
     println!("Hello from my-kernel!");
     println!("VGA Writer is working.");
     interrupts::init_idt();
+    interrupts::init_gdt();
     println!("IDT loaded.");
     x86_64::instructions::interrupts::int3();
     println!("Returned from breakpoint!");
