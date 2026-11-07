@@ -27,3 +27,4 @@ rustc-ice-*.txt
 *.bin
 *.iso
 *.img
+.vs/
