@@ -1,9 +1,11 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
 use core::panic::PanicInfo;
 #[macro_use]
 mod vga_buffer;
+mod interrupts;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -16,6 +18,10 @@ pub extern "C" fn _start() -> ! {
     vga_buffer::WRITER.lock().clear_screen();
     println!("Hello from my-kernel!");
     println!("VGA Writer is working.");
+    interrupts::init_idt();
+    println!("IDT loaded.");
+    x86_64::instructions::interrupts::int3();
+    println!("Returned from breakpoint!");
 
     loop {}
 }
