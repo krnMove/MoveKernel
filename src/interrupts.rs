@@ -4,6 +4,20 @@ use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 use lazy_static::lazy_static;
 use x86_64::structures::idt::PageFaultErrorCode;
+use pic8259::ChainedPics;
+use spin;
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum InterruptIndex {
+    Timer = PIC_1_OFFSET,
+}
+
+pub const PIC_1_OFFSET: u8 = 32;
+pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
+
+pub static PICS: spin::Mutex<ChainedPics> =
+    spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
@@ -27,8 +41,8 @@ lazy_static! {
 lazy_static! {
     static ref GDT: (GlobalDescriptorTable, Selectors) = {
         let mut gdt = GlobalDescriptorTable::new();
-        let code_selector = gdt.append(Descriptor::kernel_code_segment());
-	let tss_selector = gdt.append(Descriptor::tss_segment(&TSS));
+	let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
+	let tss_selector = gdt.add_entry(Descriptor::tss_segment(&TSS));
         (gdt, Selectors { code_selector, tss_selector })
     };
 }
@@ -41,8 +55,8 @@ pub struct Selectors {
 pub fn init_gdt() {
     GDT.0.load();
     unsafe {
-        use x86_64::instructions::segmentation::{Segment, CS};
-        CS::set_reg(GDT.1.code_selector);
+        use x86_64::instructions::segmentation::set_cs;
+        set_cs(GDT.1.code_selector);
         x86_64::instructions::tables::load_tss(GDT.1.tss_selector);
     }
 }
@@ -52,6 +66,10 @@ lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
         idt.breakpoint.set_handler_fn(breakpoint_handler);
+        idt[InterruptIndex::Timer as usize].set_handler_fn(timer_interrupt_handler);
+	unsafe {
+    		PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer as u8);
+	}
         
         unsafe {
 	    idt.page_fault.set_handler_fn(page_fault_handler);
@@ -91,4 +109,11 @@ extern "x86-interrupt" fn page_fault_handler(
     
     // Пока просто зависаем, чтобы увидеть сообщение
     loop {}
+}
+
+extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    println!("Tick!"); // Временный вывод для проверки
+    unsafe {
+        PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer as u8);
+    }
 }

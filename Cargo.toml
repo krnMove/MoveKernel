@@ -7,4 +7,5 @@ edition = "2024"
 bootloader = "0.9"
 spin = "0.9"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
-x86_64 = "0.15"
+x86_64 = "0.14"
+pic8259 = "0.10"
