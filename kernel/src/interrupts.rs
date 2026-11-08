@@ -134,26 +134,67 @@ unsafe fn execute_command() {
     
     match command {
         "/clear" => {
-            if let Some(w) = &mut crate::WRITER {
-                w.clear_screen();
-            }
-            print!("MoveKernel v1.2.0\n> ");
-        }
+   		if let Some(w) = &mut crate::WRITER {
+        		w.clear_screen();
+    		}
+    		print!("MoveKernel 1.2.5 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
+	}
         "/help" => {
-            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n> ");
-        }
-        "/echo" => {
-            print!("\n{}\n> ", args);
-        }
+    		print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /pwd - print working directory\n  /cd <dir> - change directory\n  /mkdir <dir> - create directory\n  /touch <file> - create file\n  /cat <file> - show file contents\n  /rm <file> - remove file\nMoveKernel> ");
+	}
+	"/echo" => {
+    		print!("\n{}\nMoveKernel> ", args);
+	}
         "/version" => {
-            print!("\nMoveKernel v1.2.4\n> ");
+            print!("\nMoveKernel v1.2.5\n> ");
         }
         "" => {
-            print!("\n> ");
-        }
-        _ => {
-            print!("\nUnknown command: {}\n> ", cmd);
-        }
+    		print!("\nMoveKernel> ");
+	}
+	"/ls" => {
+    		print!("\nfile1.txt  file2.txt  dir1/\nMoveKernel> ");
+	}
+	"/pwd" => {
+    		print!("\n/\nMoveKernel> ");
+	}
+	"/cd" => {
+    		if args.is_empty() {
+        		print!("\nUsage: /cd <dir>\nMoveKernel> ");
+    		} else {
+        		print!("\nChanged directory to {}\nMoveKernel> ", args);
+    		}
+	}
+	"/mkdir" => {
+    		if args.is_empty() {
+        		print!("\nUsage: /mkdir <dir>\nMoveKernel> ");
+    		} else {
+        		print!("\nCreated directory {}\nMoveKernel> ", args);
+    		}
+	}
+	"/touch" => {
+    		if args.is_empty() {
+        		print!("\nUsage: /touch <file>\nMoveKernel> ");
+    		} else {
+        		print!("\nCreated file {}\nMoveKernel> ", args);
+    		}
+	}
+	"/cat" => {
+    		if args.is_empty() {
+        		print!("\nUsage: /cat <file>\nMoveKernel> ");
+    		} else {
+        		print!("\nNo such file: {}\nMoveKernel> ", args);
+    		}
+	}
+	"/rm" => {
+    		if args.is_empty() {
+        		print!("\nUsage: /rm <file>\nMoveKernel> ");
+    		} else {
+        		print!("\nRemoved {}\nMoveKernel> ", args);
+    		}
+	}
+	_ => {
+    		print!("\nUnknown command: {}\nMoveKernel> ", cmd);
+	}
     }
     
     // Сбрасываем буфер
