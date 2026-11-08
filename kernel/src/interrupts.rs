@@ -95,10 +95,40 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     }
     // Обычные клавиши
     else if scancode < 128 {
-        if scancode == 0x0E { /* Backspace */ }
-        else if scancode == 0x1C { /* Enter */ }
-        else {
-            // символ
+        if scancode == 0x0E { // Backspace
+            unsafe {
+                if COMMAND_LENGTH > 0 {
+                    COMMAND_LENGTH -= 1;
+                    if let Some(w) = &mut crate::WRITER {
+                        if w.x_pos > 16 {
+                            w.backspace();
+                        }
+                    }
+                }
+            }
+        } else if scancode == 0x1C { // Enter
+            unsafe { execute_command(); }
+        } else {
+            // Символ
+            let shift = SHIFT_PRESSED.load(Ordering::Relaxed);
+            let caps = CAPS_LOCK_ON.load(Ordering::Relaxed);
+            let use_upper = shift ^ caps;
+            
+            let table = if use_upper {
+                &SCANCODE_TO_CHAR_UPPER
+            } else {
+                &SCANCODE_TO_CHAR_LOWER
+            };
+            
+            if let Some(c) = table[scancode as usize] {
+                unsafe {
+                    if COMMAND_LENGTH < COMMAND_BUFFER_SIZE - 1 {
+                        COMMAND_BUFFER[COMMAND_LENGTH] = c as u8;
+                        COMMAND_LENGTH += 1;
+                    }
+                }
+                print!("{}", c); // <-- ВОТ ЭТО!
+            }
         }
     }
 
