@@ -72,6 +72,7 @@ pub fn init_idt() {
 
 pub fn init_pic() {
     unsafe { pic::PICS.initialize(); }
+    print!("PIC initialized\n"); // <-- Проверка
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -81,41 +82,23 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let mut port = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
 
-    if scancode < 128 {
-        if scancode == 0x0E { // Backspace
-            unsafe {
-                if COMMAND_LENGTH > 0 {
-                    COMMAND_LENGTH -= 1;
-                    if let Some(w) = &mut crate::WRITER {
-                        if w.x_pos > 16 { // Не стираем "> "
-                            w.backspace();
-                        }
-                    }
-                }
-            }
-        } else if scancode == 0x1C { // Enter
-            unsafe { execute_command(); }
-        } else {
-            // Обычный символ
-            let shift = SHIFT_PRESSED.load(Ordering::Relaxed);
-            let caps = CAPS_LOCK_ON.load(Ordering::Relaxed);
-            let use_upper = shift ^ caps;
-            
-            let table = if use_upper {
-                &SCANCODE_TO_CHAR_UPPER
-            } else {
-                &SCANCODE_TO_CHAR_LOWER
-            };
-            
-            if let Some(c) = table[scancode as usize] {
-                unsafe {
-                    if COMMAND_LENGTH < COMMAND_BUFFER_SIZE - 1 {
-                        COMMAND_BUFFER[COMMAND_LENGTH] = c as u8;
-                        COMMAND_LENGTH += 1;
-                    }
-                }
-                print!("{}", c);
-            }
+    // Обработка Shift
+    if scancode == 0x2A || scancode == 0x36 {
+        SHIFT_PRESSED.store(true, Ordering::Relaxed);
+    } else if scancode == (0x2A | 0x80) || scancode == (0x36 | 0x80) {
+        SHIFT_PRESSED.store(false, Ordering::Relaxed);
+    }
+    // Обработка Caps Lock
+    else if scancode == 0x3A {
+        let current = CAPS_LOCK_ON.load(Ordering::Relaxed);
+        CAPS_LOCK_ON.store(!current, Ordering::Relaxed);
+    }
+    // Обычные клавиши
+    else if scancode < 128 {
+        if scancode == 0x0E { /* Backspace */ }
+        else if scancode == 0x1C { /* Enter */ }
+        else {
+            // символ
         }
     }
 
@@ -140,7 +123,7 @@ unsafe fn execute_command() {
     		print!("MoveKernel 1.2.5 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
 	}
         "/help" => {
-    		print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /pwd - print working directory\n  /cd <dir> - change directory\n  /mkdir <dir> - create directory\n  /touch <file> - create file\n  /cat <file> - show file contents\n  /rm <file> - remove file\nMoveKernel> ");
+    		print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /pwd - print working directory\n  /cd <dir> - change directory\n  /mkdir <dir> - create directory\n  /touch <file> - create file\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nMoveKernel> ");
 	}
 	"/echo" => {
     		print!("\n{}\nMoveKernel> ", args);
@@ -190,6 +173,44 @@ unsafe fn execute_command() {
         		print!("\nUsage: /rm <file>\nMoveKernel> ");
     		} else {
         		print!("\nRemoved {}\nMoveKernel> ", args);
+    		}
+	}
+	"/memtest" => {
+    		// Тест записи/чтения по адресу кучи
+    		let test_addr = 0x_4444_4444_0000 as *mut u64;
+    		unsafe {
+        		test_addr.write_volatile(0xDEADBEEF);
+        		let value = test_addr.read_volatile();
+        		print!("\nMemory test: wrote 0xDEADBEEF, read 0x{:X}\nMoveKernel> ", value);
+    		}
+	}
+	"/memread" => {
+    		if args.is_empty() {
+        		print!("\nUsage: /memread <hex_address>\nMoveKernel> ");
+    		} else {
+        		let addr = u64::from_str_radix(args, 16).unwrap_or(0);
+        		let ptr = addr as *const u64;
+        		unsafe {
+            			let value = ptr.read_volatile();
+            			print!("\nMemory at 0x{:X}: 0x{:X}\nMoveKernel> ", addr, value);
+        		}		
+    		}
+	}
+	"/memset" => {
+    		// Разделяем аргументы на адрес и значение
+    		let mut parts = args.splitn(2, ' ');
+    		let addr_str = parts.next().unwrap_or("");
+    		let val_str = parts.next().unwrap_or("");
+    		if addr_str.is_empty() || val_str.is_empty() {
+        		print!("\nUsage: /memset <hex_address> <hex_value>\nMoveKernel> ");
+    		} else {
+        		let addr = u64::from_str_radix(addr_str, 16).unwrap_or(0);
+        		let val = u64::from_str_radix(val_str, 16).unwrap_or(0);
+        		let ptr = addr as *mut u64;
+        		unsafe {
+            			ptr.write_volatile(val);
+            			print!("\nMemory at 0x{:X} set to 0x{:X}\nMoveKernel> ", addr, val);
+        		}
     		}
 	}
 	_ => {

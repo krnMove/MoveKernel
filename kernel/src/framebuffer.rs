@@ -19,6 +19,15 @@ impl Writer {
         }
     }
 
+    pub fn init(framebuffer: Option<&'static mut bootloader_api::info::FrameBuffer>) {
+    	if let Some(fb) = framebuffer {
+        	let info = fb.info();
+        	let buffer = fb.buffer_mut();
+        	let writer = Writer::new(buffer, info);
+        	unsafe { crate::WRITER = Some(writer); }
+    	}
+    }
+
     pub fn clear_screen(&mut self) {
         for byte in self.framebuffer.iter_mut() {
             *byte = 0x00;
@@ -107,8 +116,8 @@ impl core::fmt::Write for Writer {
     }
 }
 
-pub fn init(boot_info: &'static mut BootInfo) {
-    if let Some(fb) = boot_info.framebuffer.as_mut() {
+pub fn init(framebuffer: Option<&'static mut bootloader_api::info::FrameBuffer>) {
+    if let Some(fb) = framebuffer {
         let info = fb.info();
         let buffer = fb.buffer_mut();
         let writer = Writer::new(buffer, info);
