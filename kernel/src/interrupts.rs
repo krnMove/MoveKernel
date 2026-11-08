@@ -2,7 +2,12 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use lazy_static::lazy_static;
 use crate::{pic, print};
 
-static SCANCODE_TO_CHAR: [Option<char>; 128] = {
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static SHIFT_PRESSED: AtomicBool = AtomicBool::new(false);
+static CAPS_LOCK_ON: AtomicBool = AtomicBool::new(false);
+
+static SCANCODE_TO_CHAR_LOWER: [Option<char>; 128] = {
     let mut map = [None; 128];
     map[0x02] = Some('1'); map[0x03] = Some('2'); map[0x04] = Some('3');
     map[0x05] = Some('4'); map[0x06] = Some('5'); map[0x07] = Some('6');
@@ -18,6 +23,26 @@ static SCANCODE_TO_CHAR: [Option<char>; 128] = {
     map[0x2C] = Some('z'); map[0x2D] = Some('x'); map[0x2E] = Some('c');
     map[0x2F] = Some('v'); map[0x30] = Some('b'); map[0x31] = Some('n');
     map[0x32] = Some('m');
+    map[0x39] = Some(' '); // Пробел
+    map
+};
+
+static SCANCODE_TO_CHAR_UPPER: [Option<char>; 128] = {
+    let mut map = [None; 128];
+    map[0x02] = Some('!'); map[0x03] = Some('@'); map[0x04] = Some('#');
+    map[0x05] = Some('$'); map[0x06] = Some('%'); map[0x07] = Some('^');
+    map[0x08] = Some('&'); map[0x09] = Some('*'); map[0x0A] = Some('(');
+    map[0x0B] = Some(')'); map[0x0C] = Some('_'); map[0x0D] = Some('+');
+    map[0x10] = Some('Q'); map[0x11] = Some('W'); map[0x12] = Some('E');
+    map[0x13] = Some('R'); map[0x14] = Some('T'); map[0x15] = Some('Y');
+    map[0x16] = Some('U'); map[0x17] = Some('I'); map[0x18] = Some('O');
+    map[0x19] = Some('P');
+    map[0x1E] = Some('A'); map[0x1F] = Some('S'); map[0x20] = Some('D');
+    map[0x21] = Some('F'); map[0x22] = Some('G'); map[0x23] = Some('H');
+    map[0x24] = Some('J'); map[0x25] = Some('K'); map[0x26] = Some('L');
+    map[0x2C] = Some('Z'); map[0x2D] = Some('X'); map[0x2E] = Some('C');
+    map[0x2F] = Some('V'); map[0x30] = Some('B'); map[0x31] = Some('N');
+    map[0x32] = Some('M');
     map[0x39] = Some(' '); // Пробел
     map
 };
@@ -51,17 +76,46 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let mut port = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
 
-    if scancode < 128 {
+    // Обрабатываем Shift (нажатие и отпускание)
+    if scancode == 0x2A || scancode == 0x36 { // Левый или правый Shift
+        SHIFT_PRESSED.store(true, Ordering::Relaxed);
+    } else if scancode == 0x2A | 0x80 || scancode == 0x36 | 0x80 { // Отпускание Shift
+        SHIFT_PRESSED.store(false, Ordering::Relaxed);
+    }
+    // Обрабатываем Caps Lock (только нажатие)
+    else if scancode == 0x3A {
+        let current = CAPS_LOCK_ON.load(Ordering::Relaxed);
+        CAPS_LOCK_ON.store(!current, Ordering::Relaxed);
+    }
+    // Обрабатываем обычные клавиши (без кодов отпускания)
+    else if scancode < 128 {
         if scancode == 0x0E { // Backspace
             unsafe {
                 if let Some(w) = &mut crate::WRITER {
-                    if w.x_pos > 32 { // Не даём стереть "> "
+                    if w.x_pos > 32 {
                         w.backspace();
                     }
                 }
             }
-        } else if let Some(c) = SCANCODE_TO_CHAR[scancode as usize] {
-            print!("{}", c);
+    	} else if scancode == 0x1C { // Enter
+    		print!("\n> ");
+        } else {
+            let shift = SHIFT_PRESSED.load(Ordering::Relaxed);
+            let caps = CAPS_LOCK_ON.load(Ordering::Relaxed);
+            
+            // Если Shift нажат — используем заглавные (или символы с Shift)
+            // Если Caps Lock включен — инвертируем регистр для букв
+            let use_upper = shift ^ caps; // XOR: Shift или Caps Lock, но не оба
+            
+            let table = if use_upper {
+                &SCANCODE_TO_CHAR_UPPER
+            } else {
+                &SCANCODE_TO_CHAR_LOWER
+            };
+            
+            if let Some(c) = table[scancode as usize] {
+                print!("{}", c);
+            }
         }
     }
 

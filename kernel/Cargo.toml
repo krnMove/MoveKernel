@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 bootloader_api = "0.11"
-noto-sans-mono-bitmap = { version = "0.2.0", features = ["size_16", "size_24"] }
 spin = "0.9"
 x86_64 = "0.15"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }

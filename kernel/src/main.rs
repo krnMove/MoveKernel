@@ -21,14 +21,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     framebuffer::init(boot_info);
 
     unsafe {
-        if let Some(w) = &mut crate::WRITER {
-            for byte in w.framebuffer.iter_mut() {
-                *byte = 0x00;
-            }
-            w.x_pos = 0;
-            w.y_pos = 0;
-            let _ = write!(w, "MoveKernel v1.2.0\n> ");
-        }
+    	if let Some(w) = &mut crate::WRITER {
+        	for byte in w.framebuffer.iter_mut() { *byte = 0x00; }
+        	w.x_pos = 0;
+        	w.y_pos = 0;
+        	let _ = write!(w, "MoveKernel v1.2.0\n> ");
+    	}
     }
 
     interrupts::init_idt();
