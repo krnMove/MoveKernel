@@ -1,6 +1,9 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use lazy_static::lazy_static;
 use crate::{pic, print};
+const COMMAND_BUFFER_SIZE: usize = 128;
+static mut COMMAND_BUFFER: [u8; COMMAND_BUFFER_SIZE] = [0; COMMAND_BUFFER_SIZE];
+static mut COMMAND_LENGTH: usize = 0;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,6 +27,7 @@ static SCANCODE_TO_CHAR_LOWER: [Option<char>; 128] = {
     map[0x2F] = Some('v'); map[0x30] = Some('b'); map[0x31] = Some('n');
     map[0x32] = Some('m');
     map[0x39] = Some(' '); // Пробел
+    map[0x35] = Some('/');
     map
 };
 
@@ -44,6 +48,7 @@ static SCANCODE_TO_CHAR_UPPER: [Option<char>; 128] = {
     map[0x2F] = Some('V'); map[0x30] = Some('B'); map[0x31] = Some('N');
     map[0x32] = Some('M');
     map[0x39] = Some(' '); // Пробел
+    map[0x35] = Some('?');
     map
 };
 
@@ -76,36 +81,25 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let mut port = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
 
-    // Обрабатываем Shift (нажатие и отпускание)
-    if scancode == 0x2A || scancode == 0x36 { // Левый или правый Shift
-        SHIFT_PRESSED.store(true, Ordering::Relaxed);
-    } else if scancode == 0x2A | 0x80 || scancode == 0x36 | 0x80 { // Отпускание Shift
-        SHIFT_PRESSED.store(false, Ordering::Relaxed);
-    }
-    // Обрабатываем Caps Lock (только нажатие)
-    else if scancode == 0x3A {
-        let current = CAPS_LOCK_ON.load(Ordering::Relaxed);
-        CAPS_LOCK_ON.store(!current, Ordering::Relaxed);
-    }
-    // Обрабатываем обычные клавиши (без кодов отпускания)
-    else if scancode < 128 {
+    if scancode < 128 {
         if scancode == 0x0E { // Backspace
             unsafe {
-                if let Some(w) = &mut crate::WRITER {
-                    if w.x_pos > 32 {
-                        w.backspace();
+                if COMMAND_LENGTH > 0 {
+                    COMMAND_LENGTH -= 1;
+                    if let Some(w) = &mut crate::WRITER {
+                        if w.x_pos > 16 { // Не стираем "> "
+                            w.backspace();
+                        }
                     }
                 }
             }
-    	} else if scancode == 0x1C { // Enter
-    		print!("\n> ");
+        } else if scancode == 0x1C { // Enter
+            unsafe { execute_command(); }
         } else {
+            // Обычный символ
             let shift = SHIFT_PRESSED.load(Ordering::Relaxed);
             let caps = CAPS_LOCK_ON.load(Ordering::Relaxed);
-            
-            // Если Shift нажат — используем заглавные (или символы с Shift)
-            // Если Caps Lock включен — инвертируем регистр для букв
-            let use_upper = shift ^ caps; // XOR: Shift или Caps Lock, но не оба
+            let use_upper = shift ^ caps;
             
             let table = if use_upper {
                 &SCANCODE_TO_CHAR_UPPER
@@ -114,6 +108,12 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
             };
             
             if let Some(c) = table[scancode as usize] {
+                unsafe {
+                    if COMMAND_LENGTH < COMMAND_BUFFER_SIZE - 1 {
+                        COMMAND_BUFFER[COMMAND_LENGTH] = c as u8;
+                        COMMAND_LENGTH += 1;
+                    }
+                }
                 print!("{}", c);
             }
         }
@@ -122,4 +122,30 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     unsafe {
         pic::PICS.notify_end_of_interrupt(InterruptIndex::Keyboard as u8);
     }
+}
+
+unsafe fn execute_command() {
+    let cmd = core::str::from_utf8_unchecked(&COMMAND_BUFFER[..COMMAND_LENGTH]);
+    
+    match cmd {
+        "/clear" => {
+            if let Some(w) = &mut crate::WRITER {
+                w.clear_screen();
+            }
+            print!("MoveKernel v1.2.0\n> ");
+        }
+        "/help" => {
+            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n> ");
+        }
+        "" => {
+            // Пустая команда — просто новое приглашение
+            print!("\n> ");
+        }
+        _ => {
+            print!("\nUnknown command: {}\n> ", cmd);
+        }
+    }
+    
+    // Сбрасываем буфер
+    COMMAND_LENGTH = 0;
 }
