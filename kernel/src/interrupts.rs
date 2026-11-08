@@ -158,6 +158,17 @@ unsafe fn execute_command() {
 	"/echo" => {
     		print!("\n{}\nMoveKernel> ", args);
 	}
+        "/heap" => {
+            let boot_info = unsafe { (*core::ptr::addr_of!(crate::BOOT_INFO)).as_ref().unwrap() };
+            let memory_regions = &boot_info.memory_regions;
+            let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
+            let mut mapper = unsafe { crate::memory::init_page_table(phys_mem_offset) };
+            let mut frame_allocator = unsafe { crate::memory::BootInfoFrameAllocator::init(memory_regions) };
+            match crate::allocator::init_heap(&mut mapper, &mut frame_allocator) {
+                Ok(_) => print!("\nHeap initialized\nMoveKernel> "),
+                Err(e) => print!("\nHeap error: {:?}\nMoveKernel> ", e),
+            }
+        }
         "/version" => {
             print!("\nMoveKernel v1.2.5\n> ");
         }
