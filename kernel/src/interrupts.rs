@@ -127,7 +127,12 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 unsafe fn execute_command() {
     let cmd = core::str::from_utf8_unchecked(&COMMAND_BUFFER[..COMMAND_LENGTH]);
     
-    match cmd {
+    // Разделяем команду и аргументы (по первому пробелу)
+    let mut parts = cmd.splitn(2, ' ');
+    let command = parts.next().unwrap_or("");
+    let args = parts.next().unwrap_or("");
+    
+    match command {
         "/clear" => {
             if let Some(w) = &mut crate::WRITER {
                 w.clear_screen();
@@ -135,10 +140,15 @@ unsafe fn execute_command() {
             print!("MoveKernel v1.2.0\n> ");
         }
         "/help" => {
-            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n> ");
+            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n> ");
+        }
+        "/echo" => {
+            print!("\n{}\n> ", args);
+        }
+        "/version" => {
+            print!("\nMoveKernel v1.2.4\n> ");
         }
         "" => {
-            // Пустая команда — просто новое приглашение
             print!("\n> ");
         }
         _ => {
