@@ -5,6 +5,10 @@ use bootloader_api::BootInfo;
 const GLYPH_WIDTH: usize = 16;
 const GLYPH_HEIGHT: usize = 16;
 const LINE_HEIGHT: usize = 18;
+const LOGO_TOP: usize = 32;
+const LOGO_LINE_DELAY: usize = 200_000;
+const TITLE_SCREEN_FRACTION: usize = 2;
+const SCREEN_FRACTIONS: usize = 3;
 
 pub struct Writer {
     pub framebuffer: &'static mut [u8],
@@ -40,11 +44,56 @@ impl Writer {
         self.y_pos = 0;
     }
 
+    pub fn draw_logo(&mut self) {
+        const LOGO_LINES: [&str; 5] = [
+            concat!("M   M", " ", " OOO ", " ", "V   V", " ", "EEEEE"),
+            concat!("MM MM", " ", "O   O", " ", "V   V", " ", "E    "),
+            concat!("M M M", " ", "O   O", " ", "V   V", " ", "EEEE "),
+            concat!("M   M", " ", "O   O", " ", " V V ", " ", "E    "),
+            concat!("M   M", " ", " OOO ", " ", "  V  ", " ", "EEEEE"),
+        ];
+        let line_width = LOGO_LINES[0].len() * GLYPH_WIDTH;
+        let start_x = self.info.width.saturating_sub(line_width) / 2;
+
+        for (row, line) in LOGO_LINES.iter().enumerate() {
+            self.x_pos = start_x;
+            self.y_pos = LOGO_TOP + row * LINE_HEIGHT;
+            for byte in line.bytes() {
+                self.write_byte(byte);
+            }
+            if row + 1 < LOGO_LINES.len() {
+                for _ in 0..LOGO_LINE_DELAY {
+                    core::hint::spin_loop();
+                }
+            }
+        }
+
+        let logo_bottom = LOGO_TOP + LOGO_LINES.len() * LINE_HEIGHT;
+        let title_y = self.info.height * TITLE_SCREEN_FRACTION / SCREEN_FRACTIONS;
+        self.x_pos = 0;
+        self.y_pos = logo_bottom + title_y.saturating_sub(logo_bottom) / 2;
+        for _ in 0..self.info.width / GLYPH_WIDTH {
+            self.write_byte(b'-');
+        }
+
+        self.x_pos = 0;
+        self.y_pos = title_y;
+    }
+
+    pub fn write_left_aligned_line(&mut self, text: &str) {
+        self.x_pos = 0;
+        for byte in text.bytes() {
+            self.write_byte(byte);
+        }
+        self.x_pos = 0;
+        self.y_pos += LINE_HEIGHT;
+    }
+
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
             byte => {
-                if self.x_pos + GLYPH_WIDTH >= self.info.width {
+                if self.x_pos + GLYPH_WIDTH > self.info.width {
                     self.new_line();
                 }
 

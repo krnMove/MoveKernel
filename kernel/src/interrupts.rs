@@ -78,7 +78,6 @@ pub fn init_idt() {
 
 pub fn init_pic() {
     unsafe { pic::PICS.initialize(); }
-    print!("PIC initialized\n"); // <-- Проверка
 }
 
 pub fn init_timer() {
@@ -130,14 +129,32 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
                 if COMMAND_LENGTH > 0 {
                     COMMAND_LENGTH -= 1;
                     if let Some(w) = &mut crate::WRITER {
-                        if w.x_pos > 16 {
+                        if COMMAND_BUFFER[COMMAND_LENGTH] == b'\n' {
+                            let previous_line_len = COMMAND_BUFFER[..COMMAND_LENGTH]
+                                .iter()
+                                .rev()
+                                .take_while(|byte| **byte != b'\n')
+                                .count();
+                            w.x_pos = previous_line_len * 16;
+                            w.y_pos = w.y_pos.saturating_sub(18);
+                        } else if w.x_pos > 0 {
                             w.backspace();
                         }
                     }
                 }
             }
         } else if scancode == 0x1C { // Enter
-            unsafe { execute_command(); }
+            if SHIFT_PRESSED.load(Ordering::Relaxed) {
+                unsafe {
+                    if COMMAND_LENGTH < COMMAND_BUFFER_SIZE - 1 {
+                        COMMAND_BUFFER[COMMAND_LENGTH] = b'\n';
+                        COMMAND_LENGTH += 1;
+                        print!("\n");
+                    }
+                }
+            } else {
+                unsafe { execute_command(); }
+            }
         } else {
             // Символ
             let shift = SHIFT_PRESSED.load(Ordering::Relaxed);
@@ -168,7 +185,19 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 }
 
 unsafe fn execute_command() {
-    let cmd = core::str::from_utf8_unchecked(&COMMAND_BUFFER[..COMMAND_LENGTH]);
+    let input = core::str::from_utf8_unchecked(&COMMAND_BUFFER[..COMMAND_LENGTH]);
+    let mut has_command = false;
+    for cmd in input.split('\n').filter(|cmd| !cmd.is_empty()) {
+        has_command = true;
+        execute_command_line(cmd);
+    }
+    if !has_command {
+        execute_command_line("");
+    }
+    COMMAND_LENGTH = 0;
+}
+
+unsafe fn execute_command_line(cmd: &str) {
     
     // Разделяем команду и аргументы (по первому пробелу)
     let mut parts = cmd.splitn(2, ' ');
@@ -179,11 +208,13 @@ unsafe fn execute_command() {
         "/clear" => {
             if let Some(w) = &mut crate::WRITER {
                 w.clear_screen();
+                w.draw_logo();
+                w.write_left_aligned_line(crate::KERNEL_TITLE);
             }
-            print!("MoveKernel 1.6.0 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
+            print!("MoveKernel> ");
         }
         "/help" => {
-            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /touch <file> - create an empty file\n  /write <file> <text> - replace file contents\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /spawn - start a counter task\n  /tasks - list running tasks\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nMoveKernel> ");
+            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /touch <file> - create an empty file\n  /write <file> <text> - replace file contents\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /spawn - start a counter task\n  /tasks - list running tasks\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nShift+Enter starts another command; Enter runs all entered commands.\nMoveKernel> ");
         }
 	"/echo" => {
     		print!("\n{}\nMoveKernel> ", args);
@@ -192,7 +223,7 @@ unsafe fn execute_command() {
             print!("\nHeap is initialized at startup\nMoveKernel> ");
         }
         "/version" => {
-            print!("\nMoveKernel v1.6.0\nMoveKernel> ");
+            print!("\n{}\nMoveKernel> ", crate::KERNEL_TITLE);
         }
         "" => {
             print!("\nMoveKernel> ");
@@ -340,9 +371,6 @@ unsafe fn execute_command() {
     		print!("\nUnknown command: {}\nMoveKernel> ", cmd);
 	}
     }
-    
-    // Сбрасываем буфер
-    COMMAND_LENGTH = 0;
 }
 
 fn fs_error_message(error: FileSystemError) -> &'static str {

@@ -3,7 +3,6 @@
 #![feature(abi_x86_interrupt)]
 
 use core::panic::PanicInfo;
-use core::fmt::Write;
 use x86_64::VirtAddr;
 use bootloader_api::{
     config::{BootloaderConfig, Mapping},
@@ -15,6 +14,8 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     config.mappings.physical_memory = Some(Mapping::Dynamic);
     config
 };
+
+pub const KERNEL_TITLE: &str = "MoveKernel ver 1.6.1";
 
 mod framebuffer;
 mod filesystem;
@@ -52,10 +53,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // 4. вывод в нахуй
     unsafe {
         if let Some(w) = &mut crate::WRITER {
-            for byte in w.framebuffer.iter_mut() { *byte = 0x00; }
-            w.x_pos = 0;
-            w.y_pos = 0;
-            let _ = write!(w, "MoveKernel 1.6.0 by Move (MoveOS ; MoveKernel) DEV\n");
+            w.clear_screen();
+            w.draw_logo();
+            w.write_left_aligned_line(KERNEL_TITLE);
         }
     }
 
@@ -74,8 +74,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap init failed");
     scheduler::init();
     interrupts::init_timer();
-    let test = alloc::boxed::Box::new(42);
-    print!("Heap test: {}\n", test);
+    let _heap_test = alloc::boxed::Box::new(42);
     match filesystem::FILE_SYSTEM.lock().mount() {
         Ok(()) => print!("Disk filesystem mounted\n"),
         Err(error) => print!("Disk filesystem unavailable: {:?}\n", error),
