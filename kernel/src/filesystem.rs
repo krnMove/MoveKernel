@@ -13,16 +13,22 @@ const METADATA_SIZE: usize = METADATA_SECTORS as usize * SECTOR_SIZE;
 const HEADER_SIZE: usize = 16;
 const ENTRY_SIZE: usize = 28;
 const MAGIC: &[u8; 8] = b"MOVEFS01";
+const FORMAT_VERSION: u16 = 2;
+const STANDARD_DIRECTORIES: [&str; 8] = [
+    "/kernel", "/move", "/user", "/bin", "/uland", "/system", "/apps", "/private",
+];
 
 struct File {
     name: String,
     contents: String,
     slot: usize,
+    is_directory: bool,
 }
 
 pub struct FileSystem {
     files: Vec<File>,
     total_content_len: usize,
+    current_directory: String,
     mounted: bool,
 }
 
@@ -37,6 +43,7 @@ pub enum FileSystemError {
     TooManyFiles,
     FileTooLarge,
     StorageFull,
+    NotDirectory,
 }
 
 impl FileSystem {
@@ -44,6 +51,7 @@ impl FileSystem {
         Self {
             files: Vec::new(),
             total_content_len: 0,
+            current_directory: String::new(),
             mounted: false,
         }
     }
@@ -66,17 +74,20 @@ impl FileSystem {
 
         if metadata.iter().all(|byte| *byte == 0) {
             metadata[..MAGIC.len()].copy_from_slice(MAGIC);
-            metadata[8..10].copy_from_slice(&1u16.to_le_bytes());
+            metadata[8..10].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
             metadata[10..12].copy_from_slice(&(MAX_FILES as u16).to_le_bytes());
             Self::write_metadata_to_disk(&mut disk, &metadata)?;
             self.files.clear();
             self.total_content_len = 0;
+            self.current_directory.clear();
             self.mounted = true;
-            return Ok(());
+            drop(disk);
+            return self.initialize_standard_directories();
         }
 
+        let version = u16::from_le_bytes([metadata[8], metadata[9]]);
         if &metadata[..MAGIC.len()] != MAGIC
-            || u16::from_le_bytes([metadata[8], metadata[9]]) != 1
+            || !(1..=FORMAT_VERSION).contains(&version)
             || u16::from_le_bytes([metadata[10], metadata[11]]) != MAX_FILES as u16
         {
             return Err(FileSystemError::CorruptData);
@@ -86,11 +97,12 @@ impl FileSystem {
         let mut total_content_len = 0;
         for slot in 0..MAX_FILES {
             let entry = HEADER_SIZE + slot * ENTRY_SIZE;
-            match metadata[entry] {
+            let is_directory = match metadata[entry] {
                 0 => continue,
-                1 => {}
+                1 => false,
+                2 if version >= 2 => true,
                 _ => return Err(FileSystemError::CorruptData),
-            }
+            };
 
             let name_bytes = &metadata[entry + 1..entry + 1 + MAX_FILE_NAME_LEN];
             let name_len = name_bytes
@@ -106,7 +118,7 @@ impl FileSystem {
 
             let content_len =
                 u16::from_le_bytes([metadata[entry + 25], metadata[entry + 26]]) as usize;
-            if content_len > MAX_FILE_CONTENT_LEN {
+            if content_len > MAX_FILE_CONTENT_LEN || (is_directory && content_len != 0) {
                 return Err(FileSystemError::CorruptData);
             }
             total_content_len += content_len;
@@ -114,37 +126,55 @@ impl FileSystem {
                 return Err(FileSystemError::CorruptData);
             }
 
-            let mut content_bytes = [0; MAX_FILE_CONTENT_LEN];
-            for sector_index in 0..DATA_SECTORS_PER_FILE as usize {
-                let mut sector = [0; SECTOR_SIZE];
-                let lba =
-                    METADATA_SECTORS + slot as u32 * DATA_SECTORS_PER_FILE + sector_index as u32;
-                disk.read_sector(lba, &mut sector)
-                    .map_err(FileSystemError::Disk)?;
-                let start = sector_index * SECTOR_SIZE;
-                content_bytes[start..start + SECTOR_SIZE].copy_from_slice(&sector);
+            let contents = if is_directory {
+                String::new()
+            } else {
+                let mut content_bytes = [0; MAX_FILE_CONTENT_LEN];
+                for sector_index in 0..DATA_SECTORS_PER_FILE as usize {
+                    let mut sector = [0; SECTOR_SIZE];
+                    let lba = METADATA_SECTORS
+                        + slot as u32 * DATA_SECTORS_PER_FILE
+                        + sector_index as u32;
+                    disk.read_sector(lba, &mut sector)
+                        .map_err(FileSystemError::Disk)?;
+                    let start = sector_index * SECTOR_SIZE;
+                    content_bytes[start..start + SECTOR_SIZE].copy_from_slice(&sector);
+                }
+                String::from_utf8(content_bytes[..content_len].to_vec())
+                    .map_err(|_| FileSystemError::CorruptData)?
+            };
+            if let Some((parent, _)) = name.rsplit_once('/') {
+                if !files
+                    .iter()
+                    .any(|file: &File| file.is_directory && file.name == parent)
+                {
+                    return Err(FileSystemError::CorruptData);
+                }
             }
-            let contents = String::from_utf8(content_bytes[..content_len].to_vec())
-                .map_err(|_| FileSystemError::CorruptData)?;
             files.push(File {
                 name: String::from(name),
                 contents,
                 slot,
+                is_directory,
             });
         }
 
         self.files = files;
         self.total_content_len = total_content_len;
+        self.current_directory.clear();
         self.mounted = true;
-        Ok(())
+        drop(disk);
+        self.initialize_standard_directories()
     }
 
     pub fn create_file(&mut self, name: &str) -> Result<(), FileSystemError> {
         self.ensure_mounted()?;
-        Self::validate_name(name)?;
+        let name = self.resolve_path(name)?;
+        Self::validate_name(&name)?;
         if self.files.iter().any(|file| file.name == name) {
             return Err(FileSystemError::AlreadyExists);
         }
+        self.ensure_parent_directory(&name)?;
         if self.files.len() >= MAX_FILES {
             return Err(FileSystemError::TooManyFiles);
         }
@@ -153,9 +183,10 @@ impl FileSystem {
             .find(|slot| self.files.iter().all(|file| file.slot != *slot))
             .ok_or(FileSystemError::TooManyFiles)?;
         self.files.push(File {
-            name: String::from(name),
+            name,
             contents: String::new(),
             slot,
+            is_directory: false,
         });
         if let Err(error) = self.persist_metadata() {
             self.files.pop();
@@ -166,16 +197,22 @@ impl FileSystem {
 
     pub fn read_file(&self, name: &str) -> Result<&str, FileSystemError> {
         self.ensure_mounted()?;
-        self.files
+        let name = self.resolve_path(name)?;
+        let file = self
+            .files
             .iter()
             .find(|file| file.name == name)
-            .map(|file| file.contents.as_str())
-            .ok_or(FileSystemError::NotFound)
+            .ok_or(FileSystemError::NotFound)?;
+        if file.is_directory {
+            return Err(FileSystemError::NotDirectory);
+        }
+        Ok(file.contents.as_str())
     }
 
     pub fn write_file(&mut self, name: &str, contents: &str) -> Result<(), FileSystemError> {
         self.ensure_mounted()?;
-        Self::validate_name(name)?;
+        let name = self.resolve_path(name)?;
+        Self::validate_name(&name)?;
         if contents.len() > MAX_FILE_CONTENT_LEN {
             return Err(FileSystemError::FileTooLarge);
         }
@@ -185,6 +222,9 @@ impl FileSystem {
             .iter()
             .position(|file| file.name == name)
             .ok_or(FileSystemError::NotFound)?;
+        if self.files[index].is_directory {
+            return Err(FileSystemError::NotDirectory);
+        }
         let new_total = self.total_content_len - self.files[index].contents.len() + contents.len();
         if new_total > MAX_TOTAL_CONTENT_LEN {
             return Err(FileSystemError::StorageFull);
@@ -206,11 +246,15 @@ impl FileSystem {
 
     pub fn remove_file(&mut self, name: &str) -> Result<(), FileSystemError> {
         self.ensure_mounted()?;
+        let name = self.resolve_path(name)?;
         let index = self
             .files
             .iter()
             .position(|file| file.name == name)
             .ok_or(FileSystemError::NotFound)?;
+        if self.files[index].is_directory {
+            return Err(FileSystemError::NotDirectory);
+        }
         let file = self.files.remove(index);
         self.total_content_len -= file.contents.len();
         if let Err(error) = self.persist_metadata() {
@@ -221,8 +265,65 @@ impl FileSystem {
         Ok(())
     }
 
-    pub fn file_names(&self) -> impl Iterator<Item = &str> {
-        self.files.iter().map(|file| file.name.as_str())
+    pub fn create_directory(&mut self, path: &str) -> Result<(), FileSystemError> {
+        self.ensure_mounted()?;
+        let path = self.resolve_path(path)?;
+        Self::validate_name(&path)?;
+        if self.files.iter().any(|entry| entry.name == path) {
+            return Err(FileSystemError::AlreadyExists);
+        }
+        self.ensure_parent_directory(&path)?;
+        if self.files.len() >= MAX_FILES {
+            return Err(FileSystemError::TooManyFiles);
+        }
+
+        let slot = (0..MAX_FILES)
+            .find(|slot| self.files.iter().all(|entry| entry.slot != *slot))
+            .ok_or(FileSystemError::TooManyFiles)?;
+        self.files.push(File {
+            name: path,
+            contents: String::new(),
+            slot,
+            is_directory: true,
+        });
+        if let Err(error) = self.persist_metadata() {
+            self.files.pop();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn change_directory(&mut self, path: &str) -> Result<(), FileSystemError> {
+        self.ensure_mounted()?;
+        let path = self.resolve_path(path)?;
+        if !path.is_empty()
+            && !self
+                .files
+                .iter()
+                .any(|entry| entry.is_directory && entry.name == path)
+        {
+            return match self.files.iter().find(|entry| entry.name == path) {
+                Some(_) => Err(FileSystemError::NotDirectory),
+                None => Err(FileSystemError::NotFound),
+            };
+        }
+        self.current_directory = path;
+        Ok(())
+    }
+
+    pub fn current_directory(&self) -> &str {
+        &self.current_directory
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = (&str, bool)> {
+        self.files.iter().filter_map(|entry| {
+            let (parent, name) = match entry.name.rsplit_once('/') {
+                Some((parent, name)) => (parent, name),
+                None => ("", entry.name.as_str()),
+            };
+            (parent == self.current_directory)
+                .then_some((name, entry.is_directory))
+        })
     }
 
     pub fn is_mounted(&self) -> bool {
@@ -237,14 +338,78 @@ impl FileSystem {
         }
     }
 
+    fn initialize_standard_directories(&mut self) -> Result<(), FileSystemError> {
+        for path in STANDARD_DIRECTORIES {
+            match self.files.iter().find(|entry| entry.name == path[1..]) {
+                Some(entry) if entry.is_directory => continue,
+                Some(_) => {
+                    self.mounted = false;
+                    return Err(FileSystemError::AlreadyExists);
+                }
+                None => {}
+            }
+            if let Err(error) = self.create_directory(path) {
+                self.mounted = false;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_parent_directory(&self, path: &str) -> Result<(), FileSystemError> {
+        if let Some((parent, _)) = path.rsplit_once('/') {
+            match self.files.iter().find(|entry| entry.name == parent) {
+                Some(entry) if entry.is_directory => {}
+                Some(_) => return Err(FileSystemError::NotDirectory),
+                None => return Err(FileSystemError::NotFound),
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_path(&self, path: &str) -> Result<String, FileSystemError> {
+        let mut components: Vec<&str> = if path.starts_with('/') {
+            Vec::new()
+        } else {
+            self.current_directory
+                .split('/')
+                .filter(|part| !part.is_empty())
+                .collect()
+        };
+
+        for component in path.split('/') {
+            match component {
+                "" | "." => {}
+                ".." => {
+                    components.pop();
+                }
+                component
+                    if component.len() <= MAX_FILE_NAME_LEN
+                        && !component.chars().any(|character| {
+                            character.is_whitespace() || character == '\\'
+                        }) =>
+                {
+                    components.push(component);
+                }
+                _ => return Err(FileSystemError::InvalidName),
+            }
+        }
+
+        let resolved = components.join("/");
+        if resolved.len() > MAX_FILE_NAME_LEN {
+            return Err(FileSystemError::InvalidName);
+        }
+        Ok(resolved)
+    }
+
     fn persist_metadata(&self) -> Result<(), FileSystemError> {
         let mut metadata = [0; METADATA_SIZE];
         metadata[..MAGIC.len()].copy_from_slice(MAGIC);
-        metadata[8..10].copy_from_slice(&1u16.to_le_bytes());
+        metadata[8..10].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
         metadata[10..12].copy_from_slice(&(MAX_FILES as u16).to_le_bytes());
         for file in &self.files {
             let entry = HEADER_SIZE + file.slot * ENTRY_SIZE;
-            metadata[entry] = 1;
+            metadata[entry] = if file.is_directory { 2 } else { 1 };
             metadata[entry + 1..entry + 1 + file.name.len()].copy_from_slice(file.name.as_bytes());
             metadata[entry + 25..entry + 27]
                 .copy_from_slice(&(file.contents.len() as u16).to_le_bytes());
@@ -286,9 +451,15 @@ impl FileSystem {
     fn validate_name(name: &str) -> Result<(), FileSystemError> {
         if name.is_empty()
             || name.len() > MAX_FILE_NAME_LEN
-            || name
-                .chars()
-                .any(|character| character.is_whitespace() || character == '/' || character == '\\')
+            || name.split('/').any(|component| {
+                component.is_empty()
+                    || component == "."
+                    || component == ".."
+                    || component.len() > MAX_FILE_NAME_LEN
+                    || component
+                        .chars()
+                        .any(|character| character.is_whitespace() || character == '\\')
+            })
         {
             return Err(FileSystemError::InvalidName);
         }

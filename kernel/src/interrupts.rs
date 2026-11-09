@@ -97,6 +97,15 @@ pub fn init_timer() {
     }
 }
 
+pub fn print_prompt() {
+    let file_system = FILE_SYSTEM.lock();
+    if file_system.current_directory().is_empty() {
+        print!("MoveKernel> ");
+    } else {
+        print!("MoveKernel/{}> ", file_system.current_directory());
+    }
+}
+
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
     unsafe {
         pic::PICS.notify_end_of_interrupt(InterruptIndex::Timer as u8);
@@ -211,22 +220,20 @@ unsafe fn execute_command_line(cmd: &str) {
                 w.draw_logo();
                 w.write_left_aligned_line(crate::KERNEL_TITLE);
             }
-            print!("MoveKernel> ");
         }
         "/help" => {
-            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /touch <file> - create an empty file\n  /write <file> <text> - replace file contents\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /spawn - start a counter task\n  /tasks - list running tasks\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nShift+Enter starts another command; Enter runs all entered commands.\nMoveKernel> ");
+            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /pwd - show current directory\n  /cd <dir> - change directory (use / for root)\n  /mkdir <dir> - create a directory\n  /ls - list current directory\n  /touch <file> - create an empty file\n  /write <file> <text> - replace file contents\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /spawn - start a counter task\n  /tasks - list running tasks\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nShift+Enter starts another command; Enter runs all entered commands.\n");
         }
-	"/echo" => {
-    		print!("\n{}\nMoveKernel> ", args);
-	}
+        "/echo" => {
+            print!("\n{}\n", args);
+        }
         "/heap" => {
-            print!("\nHeap is initialized at startup\nMoveKernel> ");
+            print!("\nHeap is initialized at startup\n");
         }
         "/version" => {
-            print!("\n{}\nMoveKernel> ", crate::KERNEL_TITLE);
+            print!("\n{}\n", crate::KERNEL_TITLE);
         }
         "" => {
-            print!("\nMoveKernel> ");
         }
         "/ls" => {
             let file_system = FILE_SYSTEM.lock();
@@ -235,20 +242,23 @@ unsafe fn execute_command_line(cmd: &str) {
                 print!("Filesystem is not mounted\n");
             } else {
                 let mut has_files = false;
-                for name in file_system.file_names() {
-                    print!("{}\n", name);
+                for (name, is_directory) in file_system.entries() {
+                    if is_directory {
+                        print!("{}/\n", name);
+                    } else {
+                        print!("{}\n", name);
+                    }
                     has_files = true;
                 }
                 if !has_files {
                     print!("(no files)\n");
                 }
             }
-            print!("MoveKernel> ");
         }
         "/spawn" => match scheduler::spawn_counter() {
-            Ok(id) => print!("\nStarted counter task {}\nMoveKernel> ", id),
+            Ok(id) => print!("\nStarted counter task {}\n", id),
             Err(scheduler::SpawnError::TaskLimitReached) => {
-                print!("\nTask limit reached (maximum 3 counter tasks)\nMoveKernel> ");
+                print!("\nTask limit reached (maximum 3 counter tasks)\n");
             }
         },
         "/tasks" => {
@@ -265,45 +275,56 @@ unsafe fn execute_command_line(cmd: &str) {
                     }
                 }
             }
-            print!("MoveKernel> ");
         }
-	"/pwd" => {
-    		print!("\n/\nMoveKernel> ");
-	}
-	"/cd" => {
-    		if args.is_empty() {
-        		print!("\nUsage: /cd <dir>\nMoveKernel> ");
-    		} else {
-        		print!("\nChanged directory to {}\nMoveKernel> ", args);
-    		}
-	}
-	"/mkdir" => {
-    		if args.is_empty() {
-        		print!("\nUsage: /mkdir <dir>\nMoveKernel> ");
-    		} else {
-        		print!("\nCreated directory {}\nMoveKernel> ", args);
-    		}
-	}
+        "/pwd" => {
+            let file_system = FILE_SYSTEM.lock();
+            if !file_system.is_mounted() {
+                print!("\nFilesystem is not mounted\n");
+            } else if file_system.current_directory().is_empty() {
+                print!("\n/\n");
+            } else {
+                print!("\n/{}\n", file_system.current_directory());
+            }
+        }
+        "/cd" => {
+            let path = args.trim();
+            let path = if path.is_empty() { "/" } else { path };
+            match FILE_SYSTEM.lock().change_directory(path) {
+                Ok(()) => print!("\nChanged directory to {}\n", path),
+                Err(error) => print!("\nCannot change directory: {}\n", fs_error_message(error)),
+            }
+        }
+        "/mkdir" => {
+            let path = args.trim();
+            if path.is_empty() {
+                print!("\nUsage: /mkdir <dir>\n");
+            } else {
+                match FILE_SYSTEM.lock().create_directory(path) {
+                    Ok(()) => print!("\nCreated directory {}\n", path),
+                    Err(error) => print!("\nCannot create directory: {}\n", fs_error_message(error)),
+                }
+            }
+        }
         "/touch" => {
             let name = args.trim();
             if name.is_empty() {
-                print!("\nUsage: /touch <file>\nMoveKernel> ");
+                print!("\nUsage: /touch <file>\n");
             } else {
                 match FILE_SYSTEM.lock().create_file(name) {
-                    Ok(()) => print!("\nCreated file {}\nMoveKernel> ", name),
-                    Err(error) => print!("\nCannot create file: {}\nMoveKernel> ", fs_error_message(error)),
+                    Ok(()) => print!("\nCreated file {}\n", name),
+                    Err(error) => print!("\nCannot create file: {}\n", fs_error_message(error)),
                 }
             }
         }
         "/cat" => {
             let name = args.trim();
             if name.is_empty() {
-                print!("\nUsage: /cat <file>\nMoveKernel> ");
+                print!("\nUsage: /cat <file>\n");
             } else {
                 let file_system = FILE_SYSTEM.lock();
                 match file_system.read_file(name) {
-                    Ok(contents) => print!("\n{}\nMoveKernel> ", contents),
-                    Err(error) => print!("\nCannot read file: {}\nMoveKernel> ", fs_error_message(error)),
+                    Ok(contents) => print!("\n{}\n", contents),
+                    Err(error) => print!("\nCannot read file: {}\n", fs_error_message(error)),
                 }
             }
         }
@@ -311,66 +332,65 @@ unsafe fn execute_command_line(cmd: &str) {
             match args.split_once(' ') {
                 Some((name, contents)) if !name.is_empty() => {
                     match FILE_SYSTEM.lock().write_file(name, contents) {
-                        Ok(()) => print!("\nWrote file {}\nMoveKernel> ", name),
-                        Err(error) => print!("\nCannot write file: {}\nMoveKernel> ", fs_error_message(error)),
+                        Ok(()) => print!("\nWrote file {}\n", name),
+                        Err(error) => print!("\nCannot write file: {}\n", fs_error_message(error)),
                     }
                 }
-                _ => print!("\nUsage: /write <file> <text>\nMoveKernel> "),
+                _ => print!("\nUsage: /write <file> <text>\n"),
             }
         }
         "/rm" => {
             let name = args.trim();
             if name.is_empty() {
-                print!("\nUsage: /rm <file>\nMoveKernel> ");
+                print!("\nUsage: /rm <file>\n");
             } else {
                 match FILE_SYSTEM.lock().remove_file(name) {
-                    Ok(()) => print!("\nRemoved {}\nMoveKernel> ", name),
-                    Err(error) => print!("\nCannot remove file: {}\nMoveKernel> ", fs_error_message(error)),
+                    Ok(()) => print!("\nRemoved {}\n", name),
+                    Err(error) => print!("\nCannot remove file: {}\n", fs_error_message(error)),
                 }
             }
         }
         "/memtest" => {
-    		// Тест записи/чтения по адресу кучи
-    		let test_addr = 0x_4444_4444_0000 as *mut u64;
-    		unsafe {
-        		test_addr.write_volatile(0xDEADBEEF);
-        		let value = test_addr.read_volatile();
-        		print!("\nMemory test: wrote 0xDEADBEEF, read 0x{:X}\nMoveKernel> ", value);
-    		}
-	}
-	"/memread" => {
-    		if args.is_empty() {
-        		print!("\nUsage: /memread <hex_address>\nMoveKernel> ");
-    		} else {
-        		let addr = u64::from_str_radix(args, 16).unwrap_or(0);
-        		let ptr = addr as *const u64;
-        		unsafe {
-            			let value = ptr.read_volatile();
-            			print!("\nMemory at 0x{:X}: 0x{:X}\nMoveKernel> ", addr, value);
-        		}		
-    		}
-	}
-	"/memset" => {
-    		// Разделяем аргументы на адрес и значение
-    		let mut parts = args.splitn(2, ' ');
-    		let addr_str = parts.next().unwrap_or("");
-    		let val_str = parts.next().unwrap_or("");
-    		if addr_str.is_empty() || val_str.is_empty() {
-        		print!("\nUsage: /memset <hex_address> <hex_value>\nMoveKernel> ");
-    		} else {
-        		let addr = u64::from_str_radix(addr_str, 16).unwrap_or(0);
-        		let val = u64::from_str_radix(val_str, 16).unwrap_or(0);
-        		let ptr = addr as *mut u64;
-        		unsafe {
-            			ptr.write_volatile(val);
-            			print!("\nMemory at 0x{:X} set to 0x{:X}\nMoveKernel> ", addr, val);
-        		}
-    		}
-	}
-	_ => {
-    		print!("\nUnknown command: {}\nMoveKernel> ", cmd);
-	}
+            let test_addr = 0x_4444_4444_0000 as *mut u64;
+            unsafe {
+                test_addr.write_volatile(0xDEADBEEF);
+                let value = test_addr.read_volatile();
+                print!("\nMemory test: wrote 0xDEADBEEF, read 0x{:X}\n", value);
+            }
+        }
+        "/memread" => {
+            if args.is_empty() {
+                print!("\nUsage: /memread <hex_address>\n");
+            } else {
+                let addr = u64::from_str_radix(args, 16).unwrap_or(0);
+                let ptr = addr as *const u64;
+                unsafe {
+                    let value = ptr.read_volatile();
+                    print!("\nMemory at 0x{:X}: 0x{:X}\n", addr, value);
+                }
+            }
+        }
+        "/memset" => {
+            let mut parts = args.splitn(2, ' ');
+            let addr_str = parts.next().unwrap_or("");
+            let val_str = parts.next().unwrap_or("");
+            if addr_str.is_empty() || val_str.is_empty() {
+                print!("\nUsage: /memset <hex_address> <hex_value>\n");
+            } else {
+                let addr = u64::from_str_radix(addr_str, 16).unwrap_or(0);
+                let val = u64::from_str_radix(val_str, 16).unwrap_or(0);
+                let ptr = addr as *mut u64;
+                unsafe {
+                    ptr.write_volatile(val);
+                    print!("\nMemory at 0x{:X} set to 0x{:X}\n", addr, val);
+                }
+            }
+        }
+        _ => {
+            print!("\nUnknown command: {}\n", cmd);
+        }
     }
+        print_prompt();
 }
 
 fn fs_error_message(error: FileSystemError) -> &'static str {
@@ -384,5 +404,6 @@ fn fs_error_message(error: FileSystemError) -> &'static str {
         FileSystemError::TooManyFiles => "file limit reached",
         FileSystemError::FileTooLarge => "file is too large (maximum 1024 bytes)",
         FileSystemError::StorageFull => "filesystem storage limit reached",
+        FileSystemError::NotDirectory => "path is not a directory",
     }
 }

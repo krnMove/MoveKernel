@@ -79,7 +79,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Ok(()) => print!("Disk filesystem mounted\n"),
         Err(error) => print!("Disk filesystem unavailable: {:?}\n", error),
     }
-    print!("MoveKernel> ");
+    interrupts::print_prompt();
 
     loop {
         x86_64::instructions::interrupts::enable_and_hlt();
