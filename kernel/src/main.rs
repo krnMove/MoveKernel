@@ -17,6 +17,8 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
 };
 
 mod framebuffer;
+mod filesystem;
+mod disk;
 mod interrupts;
 mod pic;
 mod memory;
@@ -50,7 +52,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             for byte in w.framebuffer.iter_mut() { *byte = 0x00; }
             w.x_pos = 0;
             w.y_pos = 0;
-            let _ = write!(w, "MoveKernel 1.3.0 by Move (MoveOS ; MoveKernel) DEV\n");
+            let _ = write!(w, "MoveKernel 1.5.0 by Move (MoveOS ; MoveKernel) DEV\n");
         }
     }
 
@@ -68,7 +70,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // 7. Куча
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap init failed");
     let test = alloc::boxed::Box::new(42);
-    print!("Heap test: {}\nMoveKernel> ", test);
+    print!("Heap test: {}\n", test);
+    match filesystem::FILE_SYSTEM.lock().mount() {
+        Ok(()) => print!("Disk filesystem mounted\n"),
+        Err(error) => print!("Disk filesystem unavailable: {:?}\n", error),
+    }
+    print!("MoveKernel> ");
 
     loop {
         x86_64::instructions::interrupts::enable_and_hlt();

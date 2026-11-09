@@ -1,6 +1,7 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use lazy_static::lazy_static;
 use crate::{pic, print};
+use crate::filesystem::{FileSystemError, FILE_SYSTEM};
 const COMMAND_BUFFER_SIZE: usize = 128;
 static mut COMMAND_BUFFER: [u8; COMMAND_BUFFER_SIZE] = [0; COMMAND_BUFFER_SIZE];
 static mut COMMAND_LENGTH: usize = 0;
@@ -147,37 +148,43 @@ unsafe fn execute_command() {
     
     match command {
         "/clear" => {
-   		if let Some(w) = &mut crate::WRITER {
-        		w.clear_screen();
-    		}
-    		print!("MoveKernel 1.2.5 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
-	}
+            if let Some(w) = &mut crate::WRITER {
+                w.clear_screen();
+            }
+            print!("MoveKernel 1.5.0 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
+        }
         "/help" => {
-    		print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /pwd - print working directory\n  /cd <dir> - change directory\n  /mkdir <dir> - create directory\n  /touch <file> - create file\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nMoveKernel> ");
-	}
+            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /touch <file> - create an empty file\n  /write <file> <text> - replace file contents\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nMoveKernel> ");
+        }
 	"/echo" => {
     		print!("\n{}\nMoveKernel> ", args);
 	}
         "/heap" => {
-            let boot_info = unsafe { (*core::ptr::addr_of!(crate::BOOT_INFO)).as_ref().unwrap() };
-            let memory_regions = &boot_info.memory_regions;
-            let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
-            let mut mapper = unsafe { crate::memory::init_page_table(phys_mem_offset) };
-            let mut frame_allocator = unsafe { crate::memory::BootInfoFrameAllocator::init(memory_regions) };
-            match crate::allocator::init_heap(&mut mapper, &mut frame_allocator) {
-                Ok(_) => print!("\nHeap initialized\nMoveKernel> "),
-                Err(e) => print!("\nHeap error: {:?}\nMoveKernel> ", e),
-            }
+            print!("\nHeap is initialized at startup\nMoveKernel> ");
         }
         "/version" => {
-            print!("\nMoveKernel v1.2.5\n> ");
+            print!("\nMoveKernel v1.5.0\nMoveKernel> ");
         }
         "" => {
-    		print!("\nMoveKernel> ");
-	}
-	"/ls" => {
-    		print!("\nfile1.txt  file2.txt  dir1/\nMoveKernel> ");
-	}
+            print!("\nMoveKernel> ");
+        }
+        "/ls" => {
+            let file_system = FILE_SYSTEM.lock();
+            print!("\n");
+            if !file_system.is_mounted() {
+                print!("Filesystem is not mounted");
+            } else {
+                let mut has_files = false;
+                for name in file_system.file_names() {
+                    print!("{}  ", name);
+                    has_files = true;
+                }
+                if !has_files {
+                    print!("(no files)");
+                }
+            }
+            print!("\nMoveKernel> ");
+        }
 	"/pwd" => {
     		print!("\n/\nMoveKernel> ");
 	}
@@ -195,28 +202,52 @@ unsafe fn execute_command() {
         		print!("\nCreated directory {}\nMoveKernel> ", args);
     		}
 	}
-	"/touch" => {
-    		if args.is_empty() {
-        		print!("\nUsage: /touch <file>\nMoveKernel> ");
-    		} else {
-        		print!("\nCreated file {}\nMoveKernel> ", args);
-    		}
-	}
-	"/cat" => {
-    		if args.is_empty() {
-        		print!("\nUsage: /cat <file>\nMoveKernel> ");
-    		} else {
-        		print!("\nNo such file: {}\nMoveKernel> ", args);
-    		}
-	}
-	"/rm" => {
-    		if args.is_empty() {
-        		print!("\nUsage: /rm <file>\nMoveKernel> ");
-    		} else {
-        		print!("\nRemoved {}\nMoveKernel> ", args);
-    		}
-	}
-	"/memtest" => {
+        "/touch" => {
+            let name = args.trim();
+            if name.is_empty() {
+                print!("\nUsage: /touch <file>\nMoveKernel> ");
+            } else {
+                match FILE_SYSTEM.lock().create_file(name) {
+                    Ok(()) => print!("\nCreated file {}\nMoveKernel> ", name),
+                    Err(error) => print!("\nCannot create file: {}\nMoveKernel> ", fs_error_message(error)),
+                }
+            }
+        }
+        "/cat" => {
+            let name = args.trim();
+            if name.is_empty() {
+                print!("\nUsage: /cat <file>\nMoveKernel> ");
+            } else {
+                let file_system = FILE_SYSTEM.lock();
+                match file_system.read_file(name) {
+                    Ok(contents) => print!("\n{}\nMoveKernel> ", contents),
+                    Err(error) => print!("\nCannot read file: {}\nMoveKernel> ", fs_error_message(error)),
+                }
+            }
+        }
+        "/write" => {
+            match args.split_once(' ') {
+                Some((name, contents)) if !name.is_empty() => {
+                    match FILE_SYSTEM.lock().write_file(name, contents) {
+                        Ok(()) => print!("\nWrote file {}\nMoveKernel> ", name),
+                        Err(error) => print!("\nCannot write file: {}\nMoveKernel> ", fs_error_message(error)),
+                    }
+                }
+                _ => print!("\nUsage: /write <file> <text>\nMoveKernel> "),
+            }
+        }
+        "/rm" => {
+            let name = args.trim();
+            if name.is_empty() {
+                print!("\nUsage: /rm <file>\nMoveKernel> ");
+            } else {
+                match FILE_SYSTEM.lock().remove_file(name) {
+                    Ok(()) => print!("\nRemoved {}\nMoveKernel> ", name),
+                    Err(error) => print!("\nCannot remove file: {}\nMoveKernel> ", fs_error_message(error)),
+                }
+            }
+        }
+        "/memtest" => {
     		// Тест записи/чтения по адресу кучи
     		let test_addr = 0x_4444_4444_0000 as *mut u64;
     		unsafe {
@@ -261,4 +292,18 @@ unsafe fn execute_command() {
     
     // Сбрасываем буфер
     COMMAND_LENGTH = 0;
+}
+
+fn fs_error_message(error: FileSystemError) -> &'static str {
+    match error {
+        FileSystemError::Disk(_) => "disk I/O error",
+        FileSystemError::CorruptData => "filesystem metadata is corrupt",
+        FileSystemError::NotMounted => "filesystem is not mounted; attach data.img",
+        FileSystemError::InvalidName => "invalid file name",
+        FileSystemError::AlreadyExists => "file already exists",
+        FileSystemError::NotFound => "file not found",
+        FileSystemError::TooManyFiles => "file limit reached",
+        FileSystemError::FileTooLarge => "file is too large (maximum 1024 bytes)",
+        FileSystemError::StorageFull => "filesystem storage limit reached",
+    }
 }
