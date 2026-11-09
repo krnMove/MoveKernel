@@ -22,6 +22,7 @@ mod disk;
 mod interrupts;
 mod pic;
 mod memory;
+mod scheduler;
 extern crate alloc;
 mod allocator;
 
@@ -36,6 +37,8 @@ fn panic(info: &PanicInfo) -> ! {
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
+    x86_64::instructions::interrupts::disable();
+
     // 1. хуй framebuffera моего парня
     let framebuffer = boot_info.framebuffer.take();
 
@@ -52,7 +55,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             for byte in w.framebuffer.iter_mut() { *byte = 0x00; }
             w.x_pos = 0;
             w.y_pos = 0;
-            let _ = write!(w, "MoveKernel 1.5.1 by Move (MoveOS ; MoveKernel) DEV\n");
+            let _ = write!(w, "MoveKernel 1.6.0 by Move (MoveOS ; MoveKernel) DEV\n");
         }
     }
 
@@ -69,6 +72,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // 7. Куча
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap init failed");
+    scheduler::init();
+    interrupts::init_timer();
     let test = alloc::boxed::Box::new(42);
     print!("Heap test: {}\n", test);
     match filesystem::FILE_SYSTEM.lock().mount() {

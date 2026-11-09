@@ -2,6 +2,7 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use lazy_static::lazy_static;
 use crate::{pic, print};
 use crate::filesystem::{FileSystemError, FILE_SYSTEM};
+use crate::scheduler;
 const COMMAND_BUFFER_SIZE: usize = 128;
 static mut COMMAND_BUFFER: [u8; COMMAND_BUFFER_SIZE] = [0; COMMAND_BUFFER_SIZE];
 static mut COMMAND_LENGTH: usize = 0;
@@ -58,12 +59,14 @@ static SCANCODE_TO_CHAR_UPPER: [Option<char>; 128] = {
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum InterruptIndex {
+    Timer = pic::PIC_1_OFFSET,
     Keyboard = pic::PIC_1_OFFSET + 1,
 }
 
 lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
+        idt[InterruptIndex::Timer as u8].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard as u8].set_handler_fn(keyboard_interrupt_handler);
         idt
     };
@@ -76,6 +79,30 @@ pub fn init_idt() {
 pub fn init_pic() {
     unsafe { pic::PICS.initialize(); }
     print!("PIC initialized\n"); // <-- Проверка
+}
+
+pub fn init_timer() {
+    const PIT_COMMAND: u16 = 0x43;
+    const PIT_CHANNEL_0: u16 = 0x40;
+    const PIT_FREQUENCY: u32 = 1_193_182;
+    const TICK_HZ: u32 = 100;
+    let divisor = (PIT_FREQUENCY / TICK_HZ) as u16;
+
+    unsafe {
+        let mut command = x86_64::instructions::port::Port::new(PIT_COMMAND);
+        let mut channel_0 = x86_64::instructions::port::Port::new(PIT_CHANNEL_0);
+        command.write(0x36u8);
+        channel_0.write(divisor as u8);
+        channel_0.write((divisor >> 8) as u8);
+        pic::PICS.enable_timer();
+    }
+}
+
+extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    unsafe {
+        pic::PICS.notify_end_of_interrupt(InterruptIndex::Timer as u8);
+    }
+    scheduler::on_timer_tick();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -153,10 +180,10 @@ unsafe fn execute_command() {
             if let Some(w) = &mut crate::WRITER {
                 w.clear_screen();
             }
-            print!("MoveKernel 1.5.1 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
+            print!("MoveKernel 1.6.0 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
         }
         "/help" => {
-            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /touch <file> - create an empty file\n  /write <file> <text> - replace file contents\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nMoveKernel> ");
+            print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /touch <file> - create an empty file\n  /write <file> <text> - replace file contents\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /spawn - start a counter task\n  /tasks - list running tasks\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nMoveKernel> ");
         }
 	"/echo" => {
     		print!("\n{}\nMoveKernel> ", args);
@@ -165,7 +192,7 @@ unsafe fn execute_command() {
             print!("\nHeap is initialized at startup\nMoveKernel> ");
         }
         "/version" => {
-            print!("\nMoveKernel v1.5.1\nMoveKernel> ");
+            print!("\nMoveKernel v1.6.0\nMoveKernel> ");
         }
         "" => {
             print!("\nMoveKernel> ");
@@ -183,6 +210,28 @@ unsafe fn execute_command() {
                 }
                 if !has_files {
                     print!("(no files)\n");
+                }
+            }
+            print!("MoveKernel> ");
+        }
+        "/spawn" => match scheduler::spawn_counter() {
+            Ok(id) => print!("\nStarted counter task {}\nMoveKernel> ", id),
+            Err(scheduler::SpawnError::TaskLimitReached) => {
+                print!("\nTask limit reached (maximum 3 counter tasks)\nMoveKernel> ");
+            }
+        },
+        "/tasks" => {
+            print!("\nID  TYPE     TICKS       COUNTER\n");
+            for id in 0..scheduler::task_count() {
+                if let Some(task) = scheduler::task_info(id) {
+                    if task.is_kernel {
+                        print!("{:<3} kernel   {:<11} -\n", task.id, task.ticks);
+                    } else {
+                        print!(
+                            "{:<3} counter  {:<11} {}\n",
+                            task.id, task.ticks, task.work_count
+                        );
+                    }
                 }
             }
             print!("MoveKernel> ");

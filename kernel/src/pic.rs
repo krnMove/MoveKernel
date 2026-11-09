@@ -37,10 +37,13 @@ impl Pic {
         self.data_1.write(0x01);
         self.data_2.write(0x01);
 
-        // Разрешаем только прерывание от клавиатуры (IRQ1) на Master'е.
-        // Маска: 0 = разрешено, 1 = запрещено. Разрешаем только бит 1.
+        // Пока разрешена только клавиатура; таймер включается после инициализации планировщика.
         self.data_1.write(0xFD); // 1111_1101
         self.data_2.write(0xFF); // Slave пока не трогаем
+    }
+
+    pub unsafe fn enable_timer(&mut self) {
+        self.data_1.write(0xFC); // Разрешаем IRQ0 и IRQ1
     }
 
     pub unsafe fn notify_end_of_interrupt(&mut self, irq: u8) {
