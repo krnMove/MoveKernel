@@ -15,7 +15,7 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     config
 };
 
-pub const KERNEL_TITLE: &str = "MoveKernel ver 1.6.1";
+pub const KERNEL_TITLE: &str = "MoveKernel ver 1.7.1";
 
 mod framebuffer;
 mod filesystem;
