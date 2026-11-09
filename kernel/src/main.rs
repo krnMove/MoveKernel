@@ -52,7 +52,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             for byte in w.framebuffer.iter_mut() { *byte = 0x00; }
             w.x_pos = 0;
             w.y_pos = 0;
-            let _ = write!(w, "MoveKernel 1.5.0 by Move (MoveOS ; MoveKernel) DEV\n");
+            let _ = write!(w, "MoveKernel 1.5.1 by Move (MoveOS ; MoveKernel) DEV\n");
         }
     }
 

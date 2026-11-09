@@ -2,6 +2,10 @@ use font8x8::UnicodeFonts;
 use bootloader_api::info::FrameBufferInfo;
 use bootloader_api::BootInfo;
 
+const GLYPH_WIDTH: usize = 16;
+const GLYPH_HEIGHT: usize = 16;
+const LINE_HEIGHT: usize = 18;
+
 pub struct Writer {
     pub framebuffer: &'static mut [u8],
     pub info: FrameBufferInfo,
@@ -40,7 +44,7 @@ impl Writer {
         match byte {
             b'\n' => self.new_line(),
             byte => {
-                if self.x_pos + 16 >= self.info.width {
+                if self.x_pos + GLYPH_WIDTH >= self.info.width {
                     self.new_line();
                 }
 
@@ -64,24 +68,39 @@ impl Writer {
                     }
                 }
 
-                self.x_pos += 16;
+                self.x_pos += GLYPH_WIDTH;
             }
         }
     }
 
     fn new_line(&mut self) {
         self.x_pos = 0;
-        self.y_pos += 18;
-        if self.y_pos >= self.info.height {
-            self.y_pos = 0;
+        self.y_pos += LINE_HEIGHT;
+        if self.y_pos.saturating_add(GLYPH_HEIGHT) > self.info.height {
+            self.scroll_up(LINE_HEIGHT);
+            self.y_pos = self.y_pos.saturating_sub(LINE_HEIGHT);
         }
+    }
+
+    fn scroll_up(&mut self, rows: usize) {
+        let rows = rows.min(self.info.height);
+        let bytes_per_row = self.info.stride * self.info.bytes_per_pixel;
+        let image_size = bytes_per_row * self.info.height;
+        if rows == 0 || image_size > self.framebuffer.len() {
+            return;
+        }
+
+        let scroll_size = bytes_per_row * rows;
+        self.framebuffer
+            .copy_within(scroll_size..image_size, 0);
+        self.framebuffer[image_size - scroll_size..image_size].fill(0);
     }
 
     pub fn draw_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
         if x >= self.info.width || y >= self.info.height {
             return;
         }
-        let offset = (y * self.info.width + x) * self.info.bytes_per_pixel;
+        let offset = (y * self.info.stride + x) * self.info.bytes_per_pixel;
         if offset + 2 < self.framebuffer.len() {
             self.framebuffer[offset] = b;
             self.framebuffer[offset + 1] = g;
@@ -90,8 +109,8 @@ impl Writer {
     }
 
     pub fn backspace(&mut self) {
-        if self.x_pos >= 16 {
-            self.x_pos -= 16;
+        if self.x_pos >= GLYPH_WIDTH {
+            self.x_pos -= GLYPH_WIDTH;
             let x = self.x_pos;
             let y = self.y_pos;
             for row in 0..16 {

@@ -27,6 +27,7 @@ static SCANCODE_TO_CHAR_LOWER: [Option<char>; 128] = {
     map[0x2C] = Some('z'); map[0x2D] = Some('x'); map[0x2E] = Some('c');
     map[0x2F] = Some('v'); map[0x30] = Some('b'); map[0x31] = Some('n');
     map[0x32] = Some('m');
+    map[0x34] = Some('.');
     map[0x39] = Some(' '); // Пробел
     map[0x35] = Some('/');
     map
@@ -48,6 +49,7 @@ static SCANCODE_TO_CHAR_UPPER: [Option<char>; 128] = {
     map[0x2C] = Some('Z'); map[0x2D] = Some('X'); map[0x2E] = Some('C');
     map[0x2F] = Some('V'); map[0x30] = Some('B'); map[0x31] = Some('N');
     map[0x32] = Some('M');
+    map[0x34] = Some('>');
     map[0x39] = Some(' '); // Пробел
     map[0x35] = Some('?');
     map
@@ -151,7 +153,7 @@ unsafe fn execute_command() {
             if let Some(w) = &mut crate::WRITER {
                 w.clear_screen();
             }
-            print!("MoveKernel 1.5.0 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
+            print!("MoveKernel 1.5.1 by Move (MoveOS ; MoveKernel) DEV\nMoveKernel> ");
         }
         "/help" => {
             print!("\nAvailable commands:\n  /clear - clear screen\n  /help - show this help\n  /echo <text> - print text\n  /version - show version\n  /ls - list files\n  /touch <file> - create an empty file\n  /write <file> <text> - replace file contents\n  /cat <file> - show file contents\n  /rm <file> - remove file\n  /memtest - test memory read/write\n  /memread <addr> - read memory\n  /memset <addr> <val> - write memory\nMoveKernel> ");
@@ -163,7 +165,7 @@ unsafe fn execute_command() {
             print!("\nHeap is initialized at startup\nMoveKernel> ");
         }
         "/version" => {
-            print!("\nMoveKernel v1.5.0\nMoveKernel> ");
+            print!("\nMoveKernel v1.5.1\nMoveKernel> ");
         }
         "" => {
             print!("\nMoveKernel> ");
@@ -172,18 +174,18 @@ unsafe fn execute_command() {
             let file_system = FILE_SYSTEM.lock();
             print!("\n");
             if !file_system.is_mounted() {
-                print!("Filesystem is not mounted");
+                print!("Filesystem is not mounted\n");
             } else {
                 let mut has_files = false;
                 for name in file_system.file_names() {
-                    print!("{}  ", name);
+                    print!("{}\n", name);
                     has_files = true;
                 }
                 if !has_files {
-                    print!("(no files)");
+                    print!("(no files)\n");
                 }
             }
-            print!("\nMoveKernel> ");
+            print!("MoveKernel> ");
         }
 	"/pwd" => {
     		print!("\n/\nMoveKernel> ");
